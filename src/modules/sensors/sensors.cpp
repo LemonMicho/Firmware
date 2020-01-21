@@ -72,6 +72,7 @@
 #include "voted_sensors_update.h"
 #include "vehicle_acceleration/VehicleAcceleration.hpp"
 #include "vehicle_angular_velocity/VehicleAngularVelocity.hpp"
+#include "vehicle_imu/VehicleIMU.hpp"
 
 using namespace sensors;
 using namespace time_literals;
@@ -141,6 +142,8 @@ private:
 	VehicleAcceleration	_vehicle_acceleration;
 	VehicleAngularVelocity	_vehicle_angular_velocity;
 
+	VehicleIMU      *_vehicle_imu_list[3] {};
+
 
 	/**
 	 * Update our local parameter cache.
@@ -173,6 +176,8 @@ private:
 	 */
 	void		adc_poll();
 
+	void		InitializeVehicleIMU();
+
 };
 
 Sensors::Sensors(bool hil_enabled) :
@@ -188,12 +193,20 @@ Sensors::Sensors(bool hil_enabled) :
 
 	_vehicle_acceleration.Start();
 	_vehicle_angular_velocity.Start();
+
+	InitializeVehicleIMU();
 }
 
 Sensors::~Sensors()
 {
 	_vehicle_acceleration.Stop();
 	_vehicle_angular_velocity.Stop();
+
+	for (auto i : _vehicle_imu_list) {
+		if (i != nullptr) {
+			i->Stop();
+		}
+	}
 }
 
 int
@@ -376,6 +389,37 @@ Sensors::adc_poll()
 #endif /* ADC_AIRSPEED_VOLTAGE_CHANNEL */
 }
 
+void Sensors::InitializeVehicleIMU()
+{
+	// create a VehicleIMU instance for each accel/gyro pair
+	for (uint8_t i = 0; i < 3; i++) {
+		if (_vehicle_imu_list[i] == nullptr) {
+
+			uORB::Subscription accel_sub{ORB_ID(sensor_accel_integrated), i};
+			sensor_accel_integrated_s accel{};
+			accel_sub.copy(&accel);
+
+			uORB::Subscription gyro_sub{ORB_ID(sensor_gyro_integrated), i};
+			sensor_gyro_integrated_s gyro{};
+			gyro_sub.copy(&gyro);
+
+			if (accel.device_id > 0 && gyro.device_id > 0) {
+				VehicleIMU *imu = new VehicleIMU(i, i);
+
+				if (imu != nullptr) {
+					// Start VehicleIMU instance and store
+					if (imu->Start()) {
+						_vehicle_imu_list[i] = imu;
+
+					} else {
+						delete imu;
+					}
+				}
+			}
+		}
+	}
+}
+
 void
 Sensors::run()
 {
@@ -482,6 +526,7 @@ Sensors::run()
 		 */
 		if (!_armed && hrt_elapsed_time(&last_config_update) > 500_ms) {
 			_voted_sensors_update.initializeSensors();
+			InitializeVehicleIMU();
 			last_config_update = hrt_absolute_time();
 
 		} else {
@@ -523,6 +568,12 @@ int Sensors::print_status()
 
 	_vehicle_acceleration.PrintStatus();
 	_vehicle_angular_velocity.PrintStatus();
+
+	for (auto i : _vehicle_imu_list) {
+		if (i != nullptr) {
+			i->PrintStatus();
+		}
+	}
 
 	return 0;
 }
